@@ -1,0 +1,72 @@
+name: 定时触发 · 股票情报云端版
+
+# 这个仓库是"公开空壳"，只干一件事：到点调用【私有仓库 stock-intel-cloud】的 workflow_dispatch。
+#
+# 为什么要多这一层：
+#   GitHub 免费个人账号在【私有仓库】上根本不触发 schedule 事件（实测 schedule run = 0，
+#   官方未文档化的限制）。而【公开仓库】的 schedule 是正常工作的。
+#   所以把"定时器"放在这个公开仓库，"干活的代码 + 持仓 + Webhook"仍然全在私有仓库里。
+#
+# 安全边界（这里可以公开的前提）：
+#   - 本仓库不含任何持仓、策略、脚本、Webhook 地址，只有一个 curl 调用；
+#   - 触发用的令牌存在 Actions Secrets（加密存储，fork 不会继承，他人不可见）；
+#   - 即使有人看到这个仓库，他拿到的信息只是"存在一个每天定时推送的私有仓库"。
+#
+# cron 是 UTC，北京时间 = UTC + 8。时间 = 私有仓库 intel.yml 里的让位时间（本机先发、云端兜底）。
+
+on:
+  schedule:
+    - cron: "55 0 * * 1-5"   # 08:55  ← 本机 08:30 盘前简报
+    - cron: "50 1 * * 1-5"   # 09:50  ← 本机 09:35 盘内异动
+    - cron: "30 5 * * 1-5"   # 13:30  ← 本机 13:15 盘内异动
+    - cron: "45 6 * * 1-5"   # 14:45  ← 尾盘异动（本机让不动，云端准点）
+    - cron: "55 7 * * 1-5"   # 15:55  ← 本机 15:30 盘后复盘
+    - cron: "55 8 * * 5"     # 周五 16:55 ← 本机 16:30 每周总结
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "手动测试：跑哪一段"
+        type: choice
+        options: [premarket, alert, postclose, weekly]
+        default: postclose
+
+permissions:
+  contents: read        # 本仓库只读，不写任何东西
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 换算本次该跑哪一段
+        id: pick
+        run: |
+          SCHED="${{ github.event.schedule }}"
+          case "$SCHED" in
+            "55 0 * * 1-5")                            MODE=premarket ;;
+            "50 1 * * 1-5"|"30 5 * * 1-5"|"45 6 * * 1-5") MODE=alert ;;
+            "55 7 * * 1-5")                            MODE=postclose ;;
+            "55 8 * * 5")                              MODE=weekly ;;
+            *)                                         MODE="${{ inputs.mode }}" ;;
+          esac
+          if [ -z "$MODE" ]; then MODE=postclose; fi
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
+          echo "本次触发模式：$MODE（触发表达式：$SCHED）"
+
+      - name: 通知私有仓库开始取数推送
+        run: |
+          set -e
+          MODE="${{ steps.pick.outputs.mode }}"
+          CODE=$(curl -sS -o /tmp/resp.txt -w "%{http_code}" -X POST \
+            -H "Authorization: Bearer ${{ secrets.INTEL_DISPATCH_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/Maty-XQ/stock-intel-cloud/actions/workflows/intel.yml/dispatches" \
+            -d "{\"ref\":\"main\",\"inputs\":{\"mode\":\"$MODE\"}}")
+          echo "HTTP $CODE"
+          cat /tmp/resp.txt 2>/dev/null || true
+          echo
+          if [ "$CODE" != "204" ]; then
+            echo "❌ 触发失败（204 才算成功）：$CODE"
+            exit 1
+          fi
+          echo "✅ 已通知私有仓库运行 mode=$MODE"
