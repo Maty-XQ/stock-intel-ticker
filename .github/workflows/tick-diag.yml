@@ -1,0 +1,22 @@
+name: 诊断 · schedule 是否真的生效（验完即删）
+
+# 临时文件：只为验证"公开仓库的 schedule 会不会触发"。
+# 它只打印一行，**不调用任何接口、不发消息**，零副作用。
+# 验证方法（约 15~20 分钟后）：
+#   GET /repos/Maty-XQ/stock-intel-ticker/actions/runs?per_page=20
+#   统计 event 字段：出现 schedule 即证明定时器在这个仓库是活的。
+# 结论确认后把这个文件删掉（它每 15 分钟跑一次，虽然无副作用也没必要留着）。
+
+on:
+  schedule:
+    - cron: "7,22,37,52 * * * *"   # 每 15 分钟（避开 :00 高峰）
+  workflow_dispatch:
+
+jobs:
+  echo-only:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 只打印，不做任何其他事
+        run: |
+          echo "schedule 生效 ✅  触发表达式=${{ github.event.schedule }}"
+          date -u
