@@ -25,6 +25,7 @@ import os
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 API = "https://api.github.com"
@@ -83,14 +84,16 @@ def cmd_push(names=None):
         if not os.path.exists(local):
             print("跳过（本地不存在）：%s" % rel)
             continue
-        st, js = call("GET", "/repos/%s/%s/contents/%s?ref=main" % (OWNER, PUB, rel))
+        # 路径必须 URL 编码：仓库里可能放中文名的文档，未编码会 UnicodeEncodeError（2026-09-21 踩过）
+        rel_q = urllib.parse.quote(rel)
+        st, js = call("GET", "/repos/%s/%s/contents/%s?ref=main" % (OWNER, PUB, rel_q))
         sha = js.get("sha") if st == 200 else None
         body = {"message": "chore: 同步 %s" % rel,
                 "content": base64.b64encode(open(local, "rb").read()).decode("ascii"),
                 "branch": "main"}
         if sha:
             body["sha"] = sha
-        st, js = call("PUT", "/repos/%s/%s/contents/%s" % (OWNER, PUB, rel), body)
+        st, js = call("PUT", "/repos/%s/%s/contents/%s" % (OWNER, PUB, rel_q), body)
         print("%-34s -> %s %s" % (rel, st, "OK" if st in (200, 201) else js))
 
 
